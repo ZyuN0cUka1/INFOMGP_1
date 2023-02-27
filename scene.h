@@ -128,6 +128,8 @@ public:
   Matrix3d getCurrInvInertiaTensor(){
     Matrix3d R=Q2RotMatrix(orientation);
     
+    double Ixx, Iyy, Izz, Ixy, Izy, Ixz;
+
     /***************
      TODO
      ***************/
@@ -142,13 +144,15 @@ public:
     //just forward Euler now
     if (isFixed)
       return;  //a fixed object is immobile
-    
+
     /***************
      TODO
      ***************/
     
-    for (int i=0;i<currV.rows();i++)
-      currV.row(i)<<QRot(origV.row(i), orientation)+COM;
+    COM += comVelocity * timeStep;
+
+    for (int i = 0; i < currV.rows(); i++)
+        currV.row(i) << QRot(origV.row(i), orientation) + COM;
   }
   
   
@@ -162,11 +166,23 @@ public:
       angVelocity.setZero();
       return;
     }
-    
+
     //update linear and angular velocity according to all impulses
     /***************
      TODO
      ***************/
+    for (auto& i : currImpulses)
+    {
+        RowVector3d r = i.first - COM;
+        double R = r.norm();
+        r.normalize();
+        RowVector3d comv = i.second.dot(r) * r / totalMass;
+        RowVector3d angv = i.second / totalMass - comv;
+        angv = r.cross(angv) / R;
+        comVelocity += comv;
+        angVelocity += angv;
+    }
+    currImpulses.clear();
   }
   
   RowVector3d initStaticProperties(const double density)
@@ -317,31 +333,45 @@ public:
     std::cout<<"penPosition: "<<penPosition<<std::endl;
     //std::cout<<"handleCollision begin"<<std::endl;
     
-    
+    double M1 = m1.totalMass;
+    double M2 = m2.totalMass;
+
     //Interpretation resolution: move each object by inverse mass weighting, unless either is fixed, and then move the other. Remember to respect the direction of contactNormal and update penPosition accordingly.
     RowVector3d contactPosition;
-    if (m1.isFixed){
-      /***************
-       TODO
-       ***************/
-    } else if (m2.isFixed){
-      /***************
-       TODO
-       ***************/
-    } else { //inverse mass weighting
-      /***************
-       TODO
-       ***************/
+    RowVector3d dir = contactNormal * depth;
+
+    //RowVector3d v1 = m1.comVelocity + m1.angVelocity.cross(contactPosition - m1.COM);
+    RowVector3d v1 = m1.comVelocity;
+    double M1v = v1.dot(contactNormal);
+    //RowVector3d v2 = m2.comVelocity + m2.angVelocity.cross(contactPosition - m2.COM);
+    RowVector3d v2 = m2.comVelocity;
+    double M2v = v2.dot(-contactNormal);
+
+    double I;
+    if (m1.isFixed) {
+        contactPosition = penPosition;
+        m2.COM += dir;
+        if (2 * pow(M2v, 2) < 9.8 * depth)
+            return;
+        I = 2 * M2v * M2;
+    }    
+    else if (m2.isFixed) {
+        contactPosition = penPosition + dir;
+        m1.COM -= dir;
+        if (2 * pow(M1v, 2) < 9.8 * depth)
+            return;
+        I = 2 * M1v * M1;
+    }
+    else {
+        contactPosition = penPosition + M2 / (M1 + M2) * dir;
+        m1.COM -= (contactPosition - penPosition);
+        m2.COM += (dir - contactPosition + penPosition);
+
+        I = 2 * (M2v - M1v) * M1 * M2 / (M1 + M2);
     }
     
-    
-    //Create impulse and push them into m1.impulses and m2.impulses.
-    /***************
-     TODO
-     ***************/
-    
-    RowVector3d impulse=RowVector3d::Zero();  //change this to your result
-    
+    RowVector3d impulse = contactNormal * I;
+
     std::cout<<"impulse: "<<impulse<<std::endl;
     if (impulse.norm()>10e-6){
       m1.currImpulses.push_back(Impulse(contactPosition, -impulse));
@@ -388,11 +418,12 @@ public:
     ifstream sceneFileHandle;
     sceneFileHandle.open(dataFolder+std::string("/")+sceneFileName);
     if (!sceneFileHandle.is_open())
-      return false;
+        return false;
     int numofObjects;
     
     currTime=0;
     sceneFileHandle>>numofObjects;
+    cout << numofObjects << endl;
     for (int i=0;i<numofObjects;i++){
       MatrixXi objT, objF;
       MatrixXd objV;
