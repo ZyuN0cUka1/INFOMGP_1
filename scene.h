@@ -178,11 +178,11 @@ public:
         double R = r.norm();
         r.normalize();
         RowVector3d comI = i.second.dot(r) * r;
-        RowVector3d angI = i.second - comI;
+        RowVector3d angI = i.second - comI;                     // the impulse that will affect the angular velocity 
         RowVector3d comv = i.second.dot(r) * r / totalMass;
-        RowVector3d omiga = angI.cross(r * R);
+        RowVector3d omiga = angI.cross(r * R);                  // the delta angular velocity
         comVelocity += comv;
-        //angVelocity += invI * omiga.transpose();
+        //angVelocity += invI * omiga.transpose(); 
     }
 
     currImpulses.clear();
@@ -335,7 +335,7 @@ public:
     // TODO 
 
     std::cout<<"contactNormal: "<<contactNormal<<std::endl;
-    std::cout<<"penPosition: "<<penPosition<<std::endl;
+    //std::cout<<"penPosition: "<<penPosition<<std::endl;
     //std::cout<<"handleCollision begin"<<std::endl;
     
     double M1 = m1.totalMass;
@@ -345,7 +345,7 @@ public:
     RowVector3d contactPosition;
     RowVector3d dir = contactNormal * depth;
 
-    double cF = 1.0;    // coefficient of friction
+    double FRCoeff = 1.0;    // coefficient of friction, may cause weird bug with higher value
     
 
     //RowVector3d v = m1.comVelocity;
@@ -357,15 +357,15 @@ public:
 
     // direction of delta velocity will decide the direction of the friction
     RowVector3d delv = (v2 + M2v * contactNormal) - (v1 - M1v * contactNormal);
-    cout << delv.norm() << endl;
+    //cout << delv.norm() << endl;
     delv.normalize();
 
-    double I;
+    double I;   // value of impulse
     RowVector3d IF; // friction impulse
     if (m1.isFixed) {
         contactPosition = penPosition;
         m2.COM += dir;
-        IF = (1 + CRCoeff) * M2v * M2 * cF * delv;
+        IF = (1 + CRCoeff) * M2v * M2 * FRCoeff * delv;
         if (2 * pow(M2v, 2) > 10 * depth)
             I = (1 + CRCoeff) * M2v * M2;
         else
@@ -374,7 +374,7 @@ public:
     else if (m2.isFixed) {
         contactPosition = penPosition + dir;
         m1.COM -= dir;
-        IF = (1 + CRCoeff) * M1v * M1 * cF * delv;
+        IF = (1 + CRCoeff) * M1v * M1 * FRCoeff * delv;
         if (2 * pow(M1v, 2) > 10 * depth)
             I = (1 + CRCoeff) * M1v * M1;
         else
@@ -386,14 +386,14 @@ public:
         m2.COM += M1 / (M1 + M2) * dir;
 
         I = (1 + CRCoeff) * (M2v - M1v) / (1 / M1 + 1 / M2);
-        IF = I * cF * delv;
+        IF = I * FRCoeff * delv;
     }
     
     RowVector3d impulse = contactNormal * I;
     impulse -= IF;
         
 
-    std::cout<<"impulse: "<<impulse<<std::endl;
+    //std::cout<<"impulse: "<<impulse<<std::endl;
     if (impulse.norm()>10e-6){
       m1.currImpulses.push_back(Impulse(contactPosition, -impulse));
       m2.currImpulses.push_back(Impulse(contactPosition, impulse));
