@@ -128,13 +128,13 @@ public:
   Matrix3d getCurrInvInertiaTensor(){
     Matrix3d R=Q2RotMatrix(orientation);
     
-    double Ixx, Iyy, Izz, Ixy, Izy, Ixz;
-
     /***************
      TODO
      ***************/
+
+    Matrix3d I = R * invIT * R.transpose();
     
-    return Matrix3d::Identity(3,3);  //change this to your result
+    return I.inverse();  //change this to your result
   }
   
   
@@ -171,23 +171,26 @@ public:
     /***************
      TODO
      ***************/
+    Matrix3d invI = getCurrInvInertiaTensor();
     for (auto& i : currImpulses)
     {
         RowVector3d r = i.first - COM;
         double R = r.norm();
         r.normalize();
+        RowVector3d comI = i.second.dot(r) * r;
+        RowVector3d angI = i.second - comI;
         RowVector3d comv = i.second.dot(r) * r / totalMass;
-        RowVector3d angv = i.second / totalMass - comv;
-        angv = r.cross(angv) / R;
+        RowVector3d omiga = angI.cross(r * R);
         comVelocity += comv;
-        angVelocity += angv;
+        //angVelocity += invI * omiga.transpose();
     }
+
     currImpulses.clear();
   }
   
   RowVector3d initStaticProperties(const double density)
   {
-    //TODO: compute tet volumes and allocate to vertices
+    // TODO: compute tet volumes and allocate to vertices
     tetVolumes.conservativeResize(T.rows());
     
     RowVector3d naturalCOM; naturalCOM.setZero();
@@ -329,6 +332,8 @@ public:
   void handleCollision(Mesh& m1, Mesh& m2,const double& depth, const RowVector3d& contactNormal,const RowVector3d& penPosition, const double CRCoeff){
     
     
+    // TODO 
+
     std::cout<<"contactNormal: "<<contactNormal<<std::endl;
     std::cout<<"penPosition: "<<penPosition<<std::endl;
     //std::cout<<"handleCollision begin"<<std::endl;
@@ -340,37 +345,53 @@ public:
     RowVector3d contactPosition;
     RowVector3d dir = contactNormal * depth;
 
-    //RowVector3d v1 = m1.comVelocity + m1.angVelocity.cross(contactPosition - m1.COM);
-    RowVector3d v1 = m1.comVelocity;
+    double cF = 1.0;    // coefficient of friction
+    
+
+    //RowVector3d v = m1.comVelocity;
+    RowVector3d v1 = m1.comVelocity + m1.angVelocity.cross(contactPosition - m1.COM);
     double M1v = v1.dot(contactNormal);
-    //RowVector3d v2 = m2.comVelocity + m2.angVelocity.cross(contactPosition - m2.COM);
-    RowVector3d v2 = m2.comVelocity;
+    //RowVector3d v = m2.comVelocity;
+    RowVector3d v2 = m2.comVelocity + m2.angVelocity.cross(contactPosition - m2.COM);
     double M2v = v2.dot(-contactNormal);
 
+    // direction of delta velocity will decide the direction of the friction
+    RowVector3d delv = (v2 + M2v * contactNormal) - (v1 - M1v * contactNormal);
+    cout << delv.norm() << endl;
+    delv.normalize();
+
     double I;
+    RowVector3d IF; // friction impulse
     if (m1.isFixed) {
         contactPosition = penPosition;
         m2.COM += dir;
-        if (2 * pow(M2v, 2) < 9.8 * depth)
-            return;
-        I = 2 * M2v * M2;
+        IF = (1 + CRCoeff) * M2v * M2 * cF * delv;
+        if (2 * pow(M2v, 2) > 10 * depth)
+            I = (1 + CRCoeff) * M2v * M2;
+        else
+            I = 0;
     }    
     else if (m2.isFixed) {
         contactPosition = penPosition + dir;
         m1.COM -= dir;
-        if (2 * pow(M1v, 2) < 9.8 * depth)
-            return;
-        I = 2 * M1v * M1;
+        IF = (1 + CRCoeff) * M1v * M1 * cF * delv;
+        if (2 * pow(M1v, 2) > 10 * depth)
+            I = (1 + CRCoeff) * M1v * M1;
+        else
+            I = 0;
     }
     else {
         contactPosition = penPosition + M2 / (M1 + M2) * dir;
-        m1.COM -= (contactPosition - penPosition);
-        m2.COM += (dir - contactPosition + penPosition);
+        m1.COM += -M2 / (M1 + M2) * dir;
+        m2.COM += M1 / (M1 + M2) * dir;
 
-        I = 2 * (M2v - M1v) * M1 * M2 / (M1 + M2);
+        I = (1 + CRCoeff) * (M2v - M1v) / (1 / M1 + 1 / M2);
+        IF = I * cF * delv;
     }
     
     RowVector3d impulse = contactNormal * I;
+    impulse -= IF;
+        
 
     std::cout<<"impulse: "<<impulse<<std::endl;
     if (impulse.norm()>10e-6){
