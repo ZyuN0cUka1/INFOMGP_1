@@ -172,17 +172,14 @@ public:
      TODO
      ***************/
     Matrix3d invI = getCurrInvInertiaTensor();
+    double invM = 1 / totalMass;
     for (auto& i : currImpulses)
     {
         RowVector3d r = i.first - COM;
-        double R = r.norm();
-        r.normalize();
-        RowVector3d comI = i.second.dot(r) * r;
-        RowVector3d angI = i.second - comI;                     // the impulse that will affect the angular velocity 
-        RowVector3d comv = i.second.dot(r) * r / totalMass;
-        RowVector3d omiga = angI.cross(r * R);                  // the delta angular velocity
-        comVelocity += comv;
-        //angVelocity += invI * omiga.transpose(); 
+        RowVector3d idir = i.second.normalized();
+        double j = i.second.norm();
+        comVelocity += i.second * invM;
+        angVelocity += j * invI * (r.cross(idir).transpose());
     }
 
     currImpulses.clear();
@@ -330,73 +327,64 @@ public:
    CRCoeff: the coefficient of restitution
    *********************************************************************/
   void handleCollision(Mesh& m1, Mesh& m2,const double& depth, const RowVector3d& contactNormal,const RowVector3d& penPosition, const double CRCoeff){
-    
-    
-    // TODO 
 
     std::cout<<"contactNormal: "<<contactNormal<<std::endl;
-    //std::cout<<"penPosition: "<<penPosition<<std::endl;
+    std::cout<<"penPosition: "<<penPosition<<std::endl;
+    std::cout << "depth: " << depth << std::endl;
     //std::cout<<"handleCollision begin"<<std::endl;
     
+    const double FRCoeff = 1.0;     //coefficient of friction
+
+    Matrix3d M1i = m1.getCurrInvInertiaTensor();
+    Matrix3d M2i = m2.getCurrInvInertiaTensor();
+
+    RowVector3d R1 = penPosition - m1.COM;
+    RowVector3d R2 = penPosition - m2.COM;
+
+    RowVector3d M1v = m1.comVelocity + m1.angVelocity.cross(R1);
+    RowVector3d M2v = m2.comVelocity + m2.angVelocity.cross(R2);
+    RowVector3d delv = M1v - M2v;
+
     double M1 = m1.totalMass;
     double M2 = m2.totalMass;
+    double iM1 = 1 / M1;
+    double iM2 = 1 / M2;
+    double iM1i = R1.cross(contactNormal).transpose().dot(M1i * R1.cross(contactNormal).transpose());
+    double iM2i = R2.cross(contactNormal).transpose().dot(M2i * R2.cross(contactNormal).transpose());
 
     //Interpretation resolution: move each object by inverse mass weighting, unless either is fixed, and then move the other. Remember to respect the direction of contactNormal and update penPosition accordingly.
     RowVector3d contactPosition;
     RowVector3d dir = contactNormal * depth;
-
-    double FRCoeff = 1.0;    // coefficient of friction, may cause weird bug with higher value
     
+    double I;
+    RowVector3d impulse;
 
-    //RowVector3d v = m1.comVelocity;
-    RowVector3d v1 = m1.comVelocity + m1.angVelocity.cross(contactPosition - m1.COM);
-    double M1v = v1.dot(contactNormal);
-    //RowVector3d v = m2.comVelocity;
-    RowVector3d v2 = m2.comVelocity + m2.angVelocity.cross(contactPosition - m2.COM);
-    double M2v = v2.dot(-contactNormal);
-
-    // direction of delta velocity will decide the direction of the friction
-    RowVector3d delv = (v2 + M2v * contactNormal) - (v1 - M1v * contactNormal);
-    //cout << delv.norm() << endl;
-    delv.normalize();
-
-    double I;   // value of impulse
-    RowVector3d IF; // friction impulse
     if (m1.isFixed) {
         contactPosition = penPosition;
         m2.COM += dir;
-        IF = (1 + CRCoeff) * M2v * M2 * FRCoeff * delv;
-        if (2 * pow(M2v, 2) > 10 * depth)
-            I = (1 + CRCoeff) * M2v * M2;
-        else
-            I = 0;
+        I = -(1 + CRCoeff) * M2v.dot(contactNormal) / (iM2 + iM2i);
     }    
     else if (m2.isFixed) {
         contactPosition = penPosition + dir;
         m1.COM -= dir;
-        IF = (1 + CRCoeff) * M1v * M1 * FRCoeff * delv;
-        if (2 * pow(M1v, 2) > 10 * depth)
-            I = (1 + CRCoeff) * M1v * M1;
-        else
-            I = 0;
+        I = -(1 + CRCoeff) * M1v.dot(contactNormal) / (iM1 + iM1i);
     }
     else {
         contactPosition = penPosition + M2 / (M1 + M2) * dir;
         m1.COM += -M2 / (M1 + M2) * dir;
         m2.COM += M1 / (M1 + M2) * dir;
-
-        I = (1 + CRCoeff) * (M2v - M1v) / (1 / M1 + 1 / M2);
-        IF = I * FRCoeff * delv;
+        I = -(1 + CRCoeff) * delv.dot(contactNormal) / (iM1 + iM2 + iM1i + iM2i);
     }
-    
-    RowVector3d impulse = contactNormal * I;
-    impulse -= IF;
-        
 
-    //std::cout<<"impulse: "<<impulse<<std::endl;
+    RowVector3d tf = ((contactNormal.cross(delv)).cross(contactNormal)).normalized();
+    impulse = I * (contactNormal + FRCoeff * tf);               // add friction by impulse
+
+    //impulse = I * contactNormal;
+
+    std::cout<<"impulse: "<<impulse<<std::endl;
     if (impulse.norm()>10e-6){
-      m1.currImpulses.push_back(Impulse(contactPosition, -impulse));
-      m2.currImpulses.push_back(Impulse(contactPosition, impulse));
+      m1.currImpulses.push_back(Impulse(contactPosition, impulse));
+      m2.currImpulses.push_back(Impulse(contactPosition, -impulse));
     }
     
     //std::cout<<"handleCollision end"<<std::endl;
