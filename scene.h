@@ -131,10 +131,10 @@ public:
     /***************
      TODO
      ***************/
-
-    Matrix3d I = R * invIT * R.transpose();
-    
-    return I.inverse();  //change this to your result
+    Matrix3d IT = invIT.inverse();
+    Matrix3d I = R * IT * R.transpose();
+    Matrix3d iIT = I.inverse();
+    return iIT;  //change this to your result
   }
   
   
@@ -370,7 +370,7 @@ public:
 
         tf = ((contactNormal.cross(-M2v)).cross(contactNormal)).normalized();
 
-        I = -(1 + CRCoeff) * M2v.dot(contactNormal) / (iM2 + iM2i);
+        I = (1 + CRCoeff) * M2v.dot(contactNormal) / (iM2 + iM2i);
     }    
     else if (m2.isFixed) {
         contactPosition = penPosition + dir;
