@@ -151,6 +151,14 @@ public:
     
     COM += comVelocity * timeStep;
 
+    RowVector4d deltaq;
+    deltaq(0) = -orientation(1) * angVelocity(0) - orientation(2) * angVelocity(1) - orientation(3) * angVelocity(2);
+    deltaq(1) = orientation(0) * angVelocity(0) + orientation(2) * angVelocity(2) - orientation(3) * angVelocity(1);
+    deltaq(2) = orientation(0) * angVelocity(1) - orientation(1) * angVelocity(2) + orientation(3) * angVelocity(0);
+    deltaq(3) = orientation(0) * angVelocity(2) + orientation(1) * angVelocity(1) - orientation(2) * angVelocity(0);
+
+    orientation += deltaq * timeStep / 2;
+    orientation /= orientation.norm();
     for (int i = 0; i < currV.rows(); i++)
         currV.row(i) << QRot(origV.row(i), orientation) + COM;
   }
@@ -338,19 +346,10 @@ public:
     Matrix3d M1i = m1.getCurrInvInertiaTensor();
     Matrix3d M2i = m2.getCurrInvInertiaTensor();
 
-    RowVector3d R1 = penPosition - m1.COM;
-    RowVector3d R2 = penPosition - m2.COM;
-
-    RowVector3d M1v = m1.comVelocity + m1.angVelocity.cross(R1);
-    RowVector3d M2v = m2.comVelocity + m2.angVelocity.cross(R2);
-    RowVector3d delv = M1v - M2v;
-
     double M1 = m1.totalMass;
     double M2 = m2.totalMass;
     double iM1 = 1 / M1;
     double iM2 = 1 / M2;
-    double iM1i = R1.cross(contactNormal).transpose().dot(M1i * R1.cross(contactNormal).transpose());
-    double iM2i = R2.cross(contactNormal).transpose().dot(M2i * R2.cross(contactNormal).transpose());
 
     //Interpretation resolution: move each object by inverse mass weighting, unless either is fixed, and then move the other. Remember to respect the direction of contactNormal and update penPosition accordingly.
     RowVector3d contactPosition;
@@ -358,25 +357,54 @@ public:
     
     double I;
     RowVector3d impulse;
+    RowVector3d tf;
 
     if (m1.isFixed) {
         contactPosition = penPosition;
+
         m2.COM += dir;
+
+        RowVector3d R2 = contactPosition - m2.COM;
+        RowVector3d M2v = m2.comVelocity + m2.angVelocity.cross(R2);
+        double iM2i = R2.cross(contactNormal).transpose().dot(M2i * R2.cross(contactNormal).transpose());
+
+        tf = ((contactNormal.cross(-M2v)).cross(contactNormal)).normalized();
+
         I = -(1 + CRCoeff) * M2v.dot(contactNormal) / (iM2 + iM2i);
     }    
     else if (m2.isFixed) {
         contactPosition = penPosition + dir;
         m1.COM -= dir;
+
+        RowVector3d R1 = contactPosition - m1.COM;
+        RowVector3d M1v = m1.comVelocity + m1.angVelocity.cross(R1);
+        double iM1i = R1.cross(contactNormal).transpose().dot(M1i * R1.cross(contactNormal).transpose());
+
+        tf = ((contactNormal.cross(M1v)).cross(contactNormal)).normalized();
+
         I = -(1 + CRCoeff) * M1v.dot(contactNormal) / (iM1 + iM1i);
     }
     else {
         contactPosition = penPosition + M2 / (M1 + M2) * dir;
         m1.COM += -M2 / (M1 + M2) * dir;
         m2.COM += M1 / (M1 + M2) * dir;
+
+        RowVector3d R1 = contactPosition - m1.COM;
+        RowVector3d R2 = contactPosition - m2.COM;
+
+        RowVector3d M1v = m1.comVelocity + m1.angVelocity.cross(R1);
+        RowVector3d M2v = m2.comVelocity + m2.angVelocity.cross(R2);
+        RowVector3d delv = M1v - M2v;
+
+        double iM1i = R1.cross(contactNormal).transpose().dot(M1i * R1.cross(contactNormal).transpose());
+        double iM2i = R2.cross(contactNormal).transpose().dot(M2i * R2.cross(contactNormal).transpose());
+
+        tf = ((contactNormal.cross(delv)).cross(contactNormal)).normalized();
+
         I = -(1 + CRCoeff) * delv.dot(contactNormal) / (iM1 + iM2 + iM1i + iM2i);
     }
 
-    RowVector3d tf = ((contactNormal.cross(delv)).cross(contactNormal)).normalized();
+    
     impulse = I * (contactNormal + FRCoeff * tf);               // add friction by impulse
 
     //impulse = I * contactNormal;
