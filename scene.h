@@ -151,13 +151,13 @@ public:
     
     COM += comVelocity * timeStep;
 
-    RowVector4d deltaq;
+    RowVector4d deltaq(0, angVelocity(0), angVelocity(1), angVelocity(2));
     deltaq(0) = -orientation(1) * angVelocity(0) - orientation(2) * angVelocity(1) - orientation(3) * angVelocity(2);
-    deltaq(1) = orientation(0) * angVelocity(0) + orientation(2) * angVelocity(2) - orientation(3) * angVelocity(1);
-    deltaq(2) = orientation(0) * angVelocity(1) - orientation(1) * angVelocity(2) + orientation(3) * angVelocity(0);
-    deltaq(3) = orientation(0) * angVelocity(2) + orientation(1) * angVelocity(1) - orientation(2) * angVelocity(0);
-
-    orientation += deltaq * timeStep / 2;
+    deltaq(1) =  orientation(0) * angVelocity(0) + orientation(3) * angVelocity(1) - orientation(2) * angVelocity(2);
+    deltaq(2) = -orientation(3) * angVelocity(0) + orientation(0) * angVelocity(1) + orientation(1) * angVelocity(2);
+    deltaq(3) =  orientation(2) * angVelocity(0) - orientation(1) * angVelocity(1) + orientation(0) * angVelocity(2);
+    deltaq *= timeStep / 2;
+    orientation += deltaq;
     orientation /= orientation.norm();
     for (int i = 0; i < currV.rows(); i++)
         currV.row(i) << QRot(origV.row(i), orientation) + COM;
@@ -246,21 +246,26 @@ public:
   
   //Integrating the linear and angular velocities of the object
   //You need to modify this to integrate from acceleration in the field (basically gravity)
-  void updateVelocity(double timeStep){
+  void updateVelocity(double timeStep, double ARCoeff){
     
     if (isFixed)
       return;
     
     //integrating external forces (only gravity)
     Vector3d gravity; gravity<<0,-9.8,0.0;
-    comVelocity+=gravity*timeStep;
+    comVelocity += gravity * timeStep;
+    double dragcoeff = 1 - ARCoeff * timeStep / totalMass;
+    comVelocity *= dragcoeff;
+    angVelocity *= dragcoeff;
+    cout << "angv:" << angVelocity.norm() << endl;
+    cout << "comv:" << comVelocity.norm() << endl;
   }
   
   
   //the full integration for the time step (velocity + position)
   //You need to modify this if you are changing the integration
-  void integrate(double timeStep){
-    updateVelocity(timeStep);
+  void integrate(double timeStep, double ARCoeff){
+    updateVelocity(timeStep,ARCoeff);
     updatePosition(timeStep);
   }
   
@@ -334,14 +339,12 @@ public:
    penPosition: a point on m2 such that if m2 <= m2 + depth*contactNormal, then penPosition+depth*contactNormal is the common contact point
    CRCoeff: the coefficient of restitution
    *********************************************************************/
-  void handleCollision(Mesh& m1, Mesh& m2,const double& depth, const RowVector3d& contactNormal,const RowVector3d& penPosition, const double CRCoeff){
+  void handleCollision(Mesh& m1, Mesh& m2,const double& depth, const RowVector3d& contactNormal,const RowVector3d& penPosition, const double CRCoeff, const double FRCoeff){
 
     std::cout<<"contactNormal: "<<contactNormal<<std::endl;
-    std::cout<<"penPosition: "<<penPosition<<std::endl;
-    std::cout << "depth: " << depth << std::endl;
+    //std::cout<<"penPosition: "<<penPosition<<std::endl;
+    //std::cout << "depth: " << depth << std::endl;
     //std::cout<<"handleCollision begin"<<std::endl;
-    
-    const double FRCoeff = 1.0;     //coefficient of friction
 
     Matrix3d M1i = m1.getCurrInvInertiaTensor();
     Matrix3d M2i = m2.getCurrInvInertiaTensor();
@@ -366,9 +369,10 @@ public:
 
         RowVector3d R2 = contactPosition - m2.COM;
         RowVector3d M2v = m2.comVelocity + m2.angVelocity.cross(R2);
-        double iM2i = R2.cross(contactNormal).transpose().dot(M2i * R2.cross(contactNormal).transpose());
 
-        tf = ((contactNormal.cross(-M2v)).cross(contactNormal)).normalized();
+        tf = ((contactNormal.cross(-M2v)).cross(contactNormal)).normalized() * FRCoeff;
+
+        double iM2i = (R2.cross(contactNormal) * M2i).dot(R2.cross(contactNormal + tf).transpose());
 
         I = (1 + CRCoeff) * M2v.dot(contactNormal) / (iM2 + iM2i);
     }    
@@ -378,9 +382,10 @@ public:
 
         RowVector3d R1 = contactPosition - m1.COM;
         RowVector3d M1v = m1.comVelocity + m1.angVelocity.cross(R1);
-        double iM1i = R1.cross(contactNormal).transpose().dot(M1i * R1.cross(contactNormal).transpose());
 
-        tf = ((contactNormal.cross(M1v)).cross(contactNormal)).normalized();
+        tf = ((contactNormal.cross(M1v)).cross(contactNormal)).normalized() * FRCoeff;
+
+        double iM1i = (R1.cross(contactNormal) * M1i).dot(R1.cross(contactNormal + tf).transpose());
 
         I = -(1 + CRCoeff) * M1v.dot(contactNormal) / (iM1 + iM1i);
     }
@@ -396,18 +401,15 @@ public:
         RowVector3d M2v = m2.comVelocity + m2.angVelocity.cross(R2);
         RowVector3d delv = M1v - M2v;
 
-        double iM1i = R1.cross(contactNormal).transpose().dot(M1i * R1.cross(contactNormal).transpose());
-        double iM2i = R2.cross(contactNormal).transpose().dot(M2i * R2.cross(contactNormal).transpose());
+        tf = ((contactNormal.cross(delv)).cross(contactNormal)).normalized() * FRCoeff;
 
-        tf = ((contactNormal.cross(delv)).cross(contactNormal)).normalized();
+        double iM1i = (R1.cross(contactNormal) * M1i).dot(R1.cross(contactNormal + tf).transpose());
+        double iM2i = (R2.cross(contactNormal) * M2i).dot(R2.cross(contactNormal + tf).transpose());
 
         I = -(1 + CRCoeff) * delv.dot(contactNormal) / (iM1 + iM2 + iM1i + iM2i);
     }
 
-    
-    impulse = I * (contactNormal + FRCoeff * tf);               // add friction by impulse
-
-    //impulse = I * contactNormal;
+    impulse = I * contactNormal;
 
     std::cout<<"impulse: "<<impulse<<std::endl;
     if (impulse.norm()>10e-6){
@@ -430,12 +432,11 @@ public:
    2. detecting and handling collisions with the coefficient of restitutation CRCoeff
    3. updating the visual scene in fullV and fullT
    *********************************************************************/
-  void updateScene(double timeStep, double CRCoeff){
+  void updateScene(double timeStep, double CRCoeff, double FRCoeff, double ARCoeff){
     
     //integrating velocity, position and orientation from forces and previous states
     for (int i=0;i<meshes.size();i++)
-      meshes[i].integrate(timeStep);
-    
+      meshes[i].integrate(timeStep,ARCoeff);
     //detecting and handling collisions when found
     //This is done exhaustively: checking every two objects in the scene.
     double depth;
@@ -443,7 +444,7 @@ public:
     for (int i=0;i<meshes.size();i++)
       for (int j=i+1;j<meshes.size();j++)
         if (meshes[i].isCollide(meshes[j],depth, contactNormal, penPosition))
-          handleCollision(meshes[i], meshes[j],depth, contactNormal, penPosition,CRCoeff);
+          handleCollision(meshes[i], meshes[j],depth, contactNormal, penPosition,CRCoeff,FRCoeff);
     
     currTime+=timeStep;
   }
